@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <title>論理回路シミュレータ</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+      }
+
+      #toolbar {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        z-index: 10;
+        background-color: #f0f0f0;
+        padding: 10px;
+        border-radius: 5px;
+      }
+
+      #toolbar button {
+        display: block;
+        margin-bottom: 5px;
+        width: 150px;
+      }
+
+      #canvas {
+        border: 1px solid #000;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="toolbar">
+      <button id="add-switch">スイッチを追加</button>
+      <button id="add-led">LEDを追加</button>
+      <button id="add-and">ANDゲートを追加</button>
+      <button id="add-or">ORゲートを追加</button>
+      <button id="add-not">NOTゲートを追加</button>
+      <button id="add-nand">NANDゲートを追加</button>
+      <!-- 新しいボタンの追加 -->
+    </div>
+    <canvas id="canvas" width="1200" height="800"></canvas>
+
+    <script>
+      // Canvasとコンテキストの取得
+      const canvas = document.getElementById("canvas");
+      const ctx = canvas.getContext("2d");
+
+      // コンポーネントとワイヤーを保持する配列
+      let components = [];
+      let wires = [];
+
+      // ドラッグ操作に関する変数
+      let draggingComponent = null;
+      let offsetX = 0;
+      let offsetY = 0;
+
+      // ワイヤー接続に関する変数
+      let connectingPoint = null;
+
+      // 右クリックのダブルクリック検出用
+      let lastRightClickTime = 0;
+      const DOUBLE_CLICK_DELAY = 500; // ミリ秒
+
+      // コンポーネントのベースクラス
+      class Component {
+        constructor(x, y) {
+          this.x = x;
+          this.y = y;
+          this.inputs = []; // 入力接続点
+          this.outputs = []; // 出力接続点
+          this.width = 60;
+          this.height = 60;
+          this.selected = false;
+        }
+
+        update() {
+          // サブクラスでオーバーライド
+        }
+
+        draw() {
+          // サブクラスでオーバーライド
+        }
+
+        isInside(x, y) {
+          return (
+            x >= this.x &&
+            x <= this.x + this.width &&
+            y >= this.y &&
+            y <= this.y + this.height
+          );
+        }
+      }
+
+      // スイッチクラス
+      class Switch extends Component {
+        constructor(x, y) {
+          super(x, y);
+          this.state = false;
+          this.outputs.push(
+            new ConnectionPoint(
+              this.x + this.width,
+              this.y + this.height / 2,
+              this,
+              "output"
+            )
+          );
+        }
+
+        toggle() {
+          this.state = !this.state;
+          this.update();
+        }
+
+        update() {
+          this.outputs.forEach((output) => {
+            output.signal = this.state;
+            output.propagate();
+          });
+        }
+
+        draw() {
+          ctx.fillStyle = this.state ? "green" : "red";
+          ctx.fillRect(this.x, this.y, this.width, this.height);
+          ctx.fillStyle = "#000";
+          ctx.fillText("Switch", this.x + 5, this.y + this.height / 2);
+          this.outputs.forEach((output) => {
+            output.updatePosition(
+              this.x + this.width,
+              this.y + this.height / 2
+            );
+            output.draw();
+          });
+        }
+      }
+
+      // LEDクラス
+      class LED extends Component {
+        constructor(x, y) {
+          super(x, y);
+          this.state = false;
+          this.inputs.push(
+            new ConnectionPoint(this.x, this.y + this.height / 2, this, "input")
+          );
+        }
+
+        update() {
+          this.state = this.inputs[0].signal;
+        }
+
+        draw() {
+          ctx.fillStyle = this.state ? "yellow" : "grey";
+          ctx.beginPath();
+          ctx.arc(
+            this.x + this.width / 2,
+            this.y + this.height / 2,
+            this.width / 2,
+            0,
+            Math.PI * 2
+          );
+          ctx.fill();
+          ctx.fillStyle = "#000";
+          ctx.fillText("LED", this.x + 5, this.y + this.height / 2);
+          this.inputs[0].updatePosition(this.x, this.y + this.height / 2);
+          this.inputs[0].draw();
+        }
+      }
+
+      // ANDゲートクラス
+      class AndGate extends Component {
+        constructor(x, y) {
+          super(x, y);
+          this.inputs.push(
+            new ConnectionPoint(this.x, this.y + this.height / 3, this, "input")
+          );
+          this.inputs.push(
+            new ConnectionPoint(
+              this.x,
+              this.y + (2 * this.height) / 3,
+              this,
+              "input"
+            )
+          );
+          this.outputs.push(
+            new ConnectionPoint(
+              this.x + this.width,
+              this.y + this.height / 2,
+              this,
+              "output"
+            )
+          );
+        }
+
+        update() {
+          const a = this.inputs[0].signal || false;
+          const b = this.inputs[1].signal || false;
+          this.outputs[0].signal = a && b;
+          this.outputs[0].propagate();
+        }
+
+        draw() {
+          ctx.fillStyle = "#fff";
+          ctx.strokeStyle = "#000";
+          ctx.beginPath();
+          ctx.moveTo(this.x, this.y);
+          ctx.lineTo(this.x + this.width / 2, this.y);
+          ctx.lineTo(this.x + this.width, this.y + this.height / 2);
+          ctx.lineTo(this.x + this.width / 2, this.y + this.height);
+          ctx.lineTo(this.x, this.y + this.height);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = "#000";
+          ctx.fillText(
+            "AND",
+            this.x + this.width / 4,
+            this.y + this.height / 2
+          );
+          // 接続点の位置更新と描画
+          this.inputs.forEach((input, index) => {
+            input.updatePosition(
+              this.x,
+              this.y + (this.height / 3) * (index + 1)
+            );
+            input.draw();
+          });
+          this.outputs.forEach((output) => {
+            output.updatePosition(
+              this.x + this.width,
+              this.y + this.height / 2
+            );
+            output.draw();
+          });
+        }
+      }
+
+      // ORゲートクラス
+      class OrGate extends Component {
+        constructor(x, y) {
+          super(x, y);
+          this.inputs.push(
+            new ConnectionPoint(this.x, this.y + this.height / 3, this, "input")
+          );
+          this.inputs.push(
+            new ConnectionPoint(
+              this.x,
+              this.y + (2 * this.height) / 3,
+              this,
+              "input"
+            )
+          );
+          this.outputs.push(
+            new ConnectionPoint(
+              this.x + this.width,
+              this.y + this.height / 2,
+              this,
+              "output"
+            )
+          );
+        }
+
+        update() {
+          const a = this.inputs[0].signal || false;
+          const b = this.inputs[1].signal || false;
+          this.outputs[0].signal = a || b;
+          this.outputs[0].propagate();
+        }
+
+        draw() {
+          ctx.fillStyle = "#fff";
+          ctx.strokeStyle = "#000";
+          ctx.beginPath();
+          ctx.moveTo(this.x, this.y);
+          ctx.quadraticCurveTo(
+            this.x + this.width / 2,
+            this.y + this.height / 2,
+            this.x,
+            this.y + this.height
+          );
+          ctx.lineTo(this.x + this.width / 2, this.y + this.height);
+          ctx.quadraticCurveTo(
+            this.x + this.width,
+            this.y + this.height / 2,
+            this.x + this.width / 2,
+            this.y
+          );
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = "#000";
+          ctx.fillText("OR", this.x + this.width / 4, this.y + this.height / 2);
+          // 接続点の位置更新と描画
+          this.inputs.forEach((input, index) => {
+            input.updatePosition(
+              this.x,
+              this.y + (this.height / 3) * (index + 1)
+            );
+            input.draw();
+          });
+          this.outputs.forEach((output) => {
+            output.updatePosition(
+              this.x + this.width,
+              this.y + this.height / 2
+            );
+            output.draw();
+          });
+        }
+      }
+
+      // NOTゲートクラス
+      class NotGate extends Component {
+        constructor(x, y) {
+          super(x, y);
+          this.inputs.push(
+            new ConnectionPoint(this.x, this.y + this.height / 2, this, "input")
+          );
+          this.outputs.push(
+            new ConnectionPoint(
+              this.x + this.width,
+              this.y + this.height / 2,
+              this,
+              "output"
+            )
+          );
+        }
+
+        update() {
+          const a = this.inputs[0].signal || false;
+          this.outputs[0].signal = !a;
+          this.outputs[0].propagate();
+        }
+
+        draw() {
+          ctx.fillStyle = "#fff";
+          ctx.strokeStyle = "#000";
+          ctx.beginPath();
+          ctx.moveTo(this.x, this.y);
+          ctx.lineTo(this.x + this.width - 10, this.y + this.height / 2);
+          ctx.lineTo(this.x, this.y + this.height);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+          // 小さな円（否定記号）
+          ctx.beginPath();
+          ctx.arc(
+            this.x + this.width - 5,
+            this.y + this.height / 2,
+            5,
+            0,
+            Math.PI * 2
+          );
+          ctx.fillStyle = "#fff";
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = "#000";
+          ctx.fillText(
+            "NOT",
+            this.x + this.width / 4,
+            this.y + this.height / 2
+          );
+          // 接続点の位置更新と描画
+          this.inputs.forEach((input) => {
+            input.updatePosition(this.x, this.y + this.height / 2);
+            input.draw();
+          });
+          this.outputs.forEach((output) => {
+            output.updatePosition(
+              this.x + this.width,
+              this.y + this.height / 2
+            );
+            output.draw();
+          });
+        }
+      }
+
+      // NANDゲートクラス
+      class NandGate extends Component {
+        constructor(x, y) {
+          super(x, y);
+          this.inputs.push(
+            new ConnectionPoint(this.x, this.y + this.height / 3, this, "input")
+          );
+          this.inputs.push(
+            new ConnectionPoint(
+              this.x,
+              this.y + (2 * this.height) / 3,
+              this,
+              "input"
+            )
+          );
+          this.outputs.push(
+            new ConnectionPoint(
+              this.x + this.width,
+              this.y + this.height / 2,
+              this,
+              "output"
+            )
+          );
+        }
+
+        update() {
+          const a = this.inputs[0].signal || false;
+          const b = this.inputs[1].signal || false;
+          this.outputs[0].signal = !(a && b);
+          this.outputs[0].propagate();
+        }
+
+        draw() {
+          // ANDゲートと似た形状にNOT記号を追加
+          ctx.fillStyle = "#fff";
+          ctx.strokeStyle = "#000";
+          ctx.beginPath();
+          ctx.moveTo(this.x, this.y);
+          ctx.lineTo(this.x + this.width / 2, this.y);
+          ctx.lineTo(this.x + this.width, this.y + this.height / 2);
+          ctx.lineTo(this.x + this.width / 2, this.y + this.height);
+          ctx.lineTo(this.x, this.y + this.height);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+          // 否定記号
+          ctx.beginPath();
+          ctx.arc(
+            this.x + this.width + 5,
+            this.y + this.height / 2,
+            5,
+            0,
+            Math.PI * 2
+          );
+          ctx.fillStyle = "#fff";
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = "#000";
+          ctx.fillText(
+            "NAND",
+            this.x + this.width / 4,
+            this.y + this.height / 2
+          );
+          // 接続点の位置更新と描画
+          this.inputs.forEach((input, index) => {
+            input.updatePosition(
+              this.x,
+              this.y + (this.height / 3) * (index + 1)
+            );
+            input.draw();
+          });
+          this.outputs.forEach((output) => {
+            output.updatePosition(
+              this.x + this.width,
+              this.y + this.height / 2
+            );
+            output.draw();
+          });
+        }
+      }
+
+      // 接続点クラス
+      class ConnectionPoint {
+        constructor(x, y, parent, type) {
+          this.x = x;
+          this.y = y;
+          this.parent = parent;
+          this.type = type; // 'input' or 'output'
+          this.signal = false;
+          if (this.type === "input") {
+            this.connectedWire = null; // 入力は1本のワイヤーのみ
+          } else {
+            this.connectedWires = []; // 出力は複数のワイヤーを保持
+          }
+          this.radius = 5;
+          this.isHighlighted = false;
+        }
+
+        updatePosition(x, y) {
+          this.x = x;
+          this.y = y;
+        }
+
+        propagate() {
+          if (this.type === "output") {
+            this.connectedWires.forEach((wire) => {
+              wire.signal = this.signal;
+              wire.to.signal = this.signal;
+              if (wire.to.parent) {
+                wire.to.parent.update();
+              }
+            });
+          } else if (this.type === "input") {
+            if (this.connectedWire) {
+              this.signal = this.connectedWire.signal;
+              if (this.connectedWire.to.parent) {
+                this.connectedWire.to.parent.update();
+              }
+            }
+          }
+        }
+
+        draw() {
+          ctx.fillStyle = this.isHighlighted ? "blue" : "black";
+          ctx.beginPath();
+          ctx.arc(
+            this.x,
+            this.y,
+            this.isHighlighted ? this.radius * 1.5 : this.radius,
+            0,
+            Math.PI * 2
+          );
+          ctx.fill();
+        }
+
+        isMouseOver(mx, my) {
+          return Math.hypot(this.x - mx, this.y - my) < this.radius * 2;
+        }
+      }
+
+      // ワイヤークラス
+      class Wire {
+        constructor(from, to) {
+          this.from = from;
+          this.to = to;
+          this.signal = from.signal;
+        }
+
+        propagate() {
+          this.signal = this.from.signal;
+          this.to.signal = this.signal;
+          if (this.to.parent) {
+            this.to.parent.update();
+          }
+        }
+
+        draw() {
+          ctx.strokeStyle = this.signal ? "red" : "black";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(this.from.x, this.from.y);
+          ctx.lineTo(this.to.x, this.to.y);
+          ctx.stroke();
+        }
+
+        isMouseOver(mx, my) {
+          return (
+            distanceToLine(
+              mx,
+              my,
+              this.from.x,
+              this.from.y,
+              this.to.x,
+              this.to.y
+            ) < 5
+          );
+        }
+      }
+
+      // 描画関数
+      function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // 先にコンポーネントを描画して接続点の位置を更新
+        components.forEach((component) => component.draw());
+        // その後にワイヤーを描画
+        wires.forEach((wire) => wire.draw());
+      }
+
+      // コンポーネントの追加関数
+      function addComponent(type) {
+        let component;
+        switch (type) {
+          case "switch":
+            component = new Switch(200, 100);
+            break;
+          case "led":
+            component = new LED(300, 100);
+            break;
+          case "and":
+            component = new AndGate(400, 100);
+            break;
+          case "or":
+            component = new OrGate(500, 100);
+            break;
+          case "not":
+            component = new NotGate(600, 100);
+            break;
+          case "nand":
+            component = new NandGate(700, 100);
+            break;
+        }
+        components.push(component);
+        draw();
+      }
+
+      // ツールバーのボタンイベント
+      document
+        .getElementById("add-switch")
+        .addEventListener("click", () => addComponent("switch"));
+      document
+        .getElementById("add-led")
+        .addEventListener("click", () => addComponent("led"));
+      document
+        .getElementById("add-and")
+        .addEventListener("click", () => addComponent("and"));
+      document
+        .getElementById("add-or")
+        .addEventListener("click", () => addComponent("or"));
+      document
+        .getElementById("add-not")
+        .addEventListener("click", () => addComponent("not"));
+      document
+        .getElementById("add-nand")
+        .addEventListener("click", () => addComponent("nand")); // 新しいボタンのイベント追加
+
+      // マウスイベントの追加
+
+      // 右クリックのコンテキストメニューを無効化
+      canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+
+      canvas.addEventListener("mousedown", (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
+
+        // 右クリックのダブルクリック検出
+        if (e.button === 2) {
+          // 右クリック
+          const currentTime = new Date().getTime();
+          if (currentTime - lastRightClickTime < DOUBLE_CLICK_DELAY) {
+            deleteObject(mx, my);
+            lastRightClickTime = 0;
+          } else {
+            lastRightClickTime = currentTime;
+          }
+          return;
+        }
+
+        // 左クリックの場合の処理
+        // 接続点のチェック
+        for (let component of components) {
+          for (let point of [...component.inputs, ...component.outputs]) {
+            if (point.isMouseOver(mx, my)) {
+              connectingPoint = point;
+              return;
+            }
+          }
+        }
+        // コンポーネントのチェック
+        for (let component of components) {
+          if (component.isInside(mx, my)) {
+            draggingComponent = component;
+            offsetX = mx - component.x;
+            offsetY = my - component.y;
+            return;
+          }
+        }
+      });
+
+      canvas.addEventListener("mousemove", (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
+        let hover = false;
+        // 接続点のハイライト
+        components.forEach((component) => {
+          [...component.inputs, ...component.outputs].forEach((point) => {
+            if (point.isMouseOver(mx, my)) {
+              point.isHighlighted = true;
+              hover = true;
+            } else {
+              point.isHighlighted = false;
+            }
+          });
+        });
+        if (hover) {
+          canvas.style.cursor = "pointer";
+        } else {
+          canvas.style.cursor = "default";
+        }
+        // コンポーネントのドラッグ
+        if (draggingComponent) {
+          draggingComponent.x = mx - offsetX;
+          draggingComponent.y = my - offsetY;
+          draw();
+        }
+      });
+
+      canvas.addEventListener("mouseup", (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
+        if (connectingPoint) {
+          // 接続点への接続
+          for (let component of components) {
+            for (let point of [...component.inputs, ...component.outputs]) {
+              if (point !== connectingPoint && point.isMouseOver(mx, my)) {
+                // 入力と出力を接続
+                if (connectingPoint.type !== point.type) {
+                  let fromPoint, toPoint;
+                  if (connectingPoint.type === "output") {
+                    fromPoint = connectingPoint;
+                    toPoint = point;
+                  } else {
+                    fromPoint = point;
+                    toPoint = connectingPoint;
+                  }
+
+                  // 入力側は既に接続されている場合をチェック
+                  if (toPoint.type === "input" && toPoint.connectedWire) {
+                    // 既存のワイヤーを削除
+                    wires = wires.filter(
+                      (wire) => wire !== toPoint.connectedWire
+                    );
+                    // 出力側の接続も解除
+                    const fromPointOld = toPoint.connectedWire.from;
+                    if (fromPointOld.type === "output") {
+                      const index = fromPointOld.connectedWires.indexOf(
+                        toPoint.connectedWire
+                      );
+                      if (index !== -1) {
+                        fromPointOld.connectedWires.splice(index, 1);
+                      }
+                    }
+                    toPoint.connectedWire = null;
+                  }
+
+                  // ワイヤーの作成
+                  let wire = new Wire(fromPoint, toPoint);
+                  wires.push(wire);
+
+                  // 接続点にワイヤーを登録
+                  if (fromPoint.type === "output") {
+                    fromPoint.connectedWires.push(wire);
+                  }
+                  if (toPoint.type === "input") {
+                    toPoint.connectedWire = wire;
+                  }
+
+                  // 信号の伝播
+                  wire.propagate();
+
+                  draw();
+                }
+              }
+            }
+          }
+          connectingPoint = null;
+        }
+        draggingComponent = null;
+      });
+
+      canvas.addEventListener("click", (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
+        // スイッチの切り替え
+        for (let component of components) {
+          if (component instanceof Switch && component.isInside(mx, my)) {
+            component.toggle();
+            draw();
+            return;
+          }
+        }
+      });
+
+      // オブジェクト削除関数
+      function deleteObject(mx, my) {
+        // コンポーネントの削除
+        for (let i = components.length - 1; i >= 0; i--) {
+          if (components[i].isInside(mx, my)) {
+            // 接続されているワイヤーを削除
+            [...components[i].inputs, ...components[i].outputs].forEach(
+              (point) => {
+                if (point.type === "input" && point.connectedWire) {
+                  // 出力側からもワイヤーを削除
+                  const wire = point.connectedWire;
+                  wires = wires.filter((w) => w !== wire);
+                  if (wire.from.type === "output") {
+                    const index = wire.from.connectedWires.indexOf(wire);
+                    if (index !== -1) {
+                      wire.from.connectedWires.splice(index, 1);
+                    }
+                  }
+                } else if (point.type === "output") {
+                  point.connectedWires.slice().forEach((wire) => {
+                    wires = wires.filter((w) => w !== wire);
+                    const toPoint = wire.to;
+                    if (toPoint.type === "input") {
+                      toPoint.connectedWire = null;
+                    }
+                    // 出力側からワイヤーを削除
+                    const index = wire.from.connectedWires.indexOf(wire);
+                    if (index !== -1) {
+                      wire.from.connectedWires.splice(index, 1);
+                    }
+                  });
+                }
+              }
+            );
+            components.splice(i, 1);
+            draw();
+            return;
+          }
+        }
+        // ワイヤーの削除
+        for (let i = wires.length - 1; i >= 0; i--) {
+          const wire = wires[i];
+          if (wire.isMouseOver(mx, my)) {
+            // 出力側の接続を解除
+            if (wire.from.type === "output") {
+              const index = wire.from.connectedWires.indexOf(wire);
+              if (index !== -1) {
+                wire.from.connectedWires.splice(index, 1);
+              }
+            }
+            // 入力側の接続を解除
+            if (wire.to.type === "input") {
+              wire.to.connectedWire = null;
+            }
+            wires.splice(i, 1);
+            draw();
+            return;
+          }
+        }
+      }
+
+      // ユーティリティ関数：点と線分の距離を計算
+      function distanceToLine(px, py, x1, y1, x2, y2) {
+        const A = px - x1;
+        const B = py - y1;
+        const C = x2 - x1;
+        const D = y2 - y1;
+
+        const dot = A * C + B * D;
+        const len_sq = C * C + D * D;
+        let param = -1;
+        if (len_sq !== 0) param = dot / len_sq;
+
+        let xx, yy;
+
+        if (param < 0) {
+          xx = x1;
+          yy = y1;
+        } else if (param > 1) {
+          xx = x2;
+          yy = y2;
+        } else {
+          xx = x1 + param * C;
+          yy = y1 + param * D;
+        }
+
+        const dx = px - xx;
+        const dy = py - yy;
+        return Math.sqrt(dx * dx + dy * dy);
+      }
+
+      // 初期描画
+      draw();
+    </script>
+  </body>
+</html>
